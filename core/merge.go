@@ -105,6 +105,12 @@ func mergePackageJson(dir string) (int, error) {
 		}
 	}
 
+	// Validate JSON before writing
+	var validate interface{}
+	if err := json.Unmarshal([]byte(content), &validate); err != nil {
+		return 0, fmt.Errorf("merged package.json is invalid JSON: %w", err)
+	}
+
 	if err := os.WriteFile(origPath, []byte(content), 0644); err != nil {
 		return 0, err
 	}
