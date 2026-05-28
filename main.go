@@ -35,6 +35,7 @@ func main() {
 	// np init
 	if args[0] == "init" {
 		core.RunInit()
+		printBanner()
 		return
 	}
 
@@ -43,12 +44,14 @@ func main() {
 		// np i → full install
 		if len(args) == 1 {
 			core.RunInstall(nil)
+			printBanner()
 			return
 		}
 		// np i pkg@latest → install specific package
 		pkgArgs, registry := parseArgs(args[1:])
 		core.SetRegistry(registry)
 		core.RunInstall(pkgArgs)
+		printBanner()
 		return
 	}
 
@@ -57,6 +60,7 @@ func main() {
 	if len(pkgArgs) > 0 {
 		core.SetRegistry(registry)
 		core.RunInstall(pkgArgs)
+		printBanner()
 		return
 	}
 
@@ -84,9 +88,6 @@ func parseArgs(args []string) ([]string, string) {
 }
 
 func printHelp() {
-	goVersion := runtime.Version()
-	goArch := runtime.GOOS + "/" + runtime.GOARCH
-
 	fmt.Println(`np (npm-proxy) v` + version + ` — bypass internal registry for npm install
 
 Usage:
@@ -113,8 +114,14 @@ Examples:
 
 Local Dependencies:
   在项目同级目录创建 localDeps/[projectName]/ 目录
-  将 .tgz 文件放入该目录即可自动使用本地依赖安装
+  将 .tgz 文件放入该目录即可自动使用本地依赖安装`)
+}
 
+func printBanner() {
+	goVersion := runtime.Version()
+	goArch := runtime.GOOS + "/" + runtime.GOARCH
+
+	fmt.Println(`
 ═══════════════════════════════════════════════════════════════
     ____
    / __ \___  _________  ____

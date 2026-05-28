@@ -110,6 +110,7 @@ func mergePackageJson(dir string) (int, error) {
 	if err := json.Unmarshal([]byte(content), &validate); err != nil {
 		return 0, fmt.Errorf("merged package.json is invalid JSON: %w", err)
 	}
+	fmt.Println("[OK] package.json JSON 校验通过")
 
 	if err := os.WriteFile(origPath, []byte(content), 0644); err != nil {
 		return 0, err
@@ -232,7 +233,11 @@ func mergePackageLockJson(dir string) (int, error) {
 		}
 	}
 
-	return added, writeJson(filepath.Join(dir, "package-lock.json.bak"), origLock)
+	if err := writeJson(filepath.Join(dir, "package-lock.json.bak"), origLock); err != nil {
+		return 0, err
+	}
+	fmt.Println("[OK] package-lock.json JSON 校验通过")
+	return added, nil
 }
 
 func readJson(path string) (map[string]interface{}, error) {
