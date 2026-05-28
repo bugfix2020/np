@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -18,40 +17,79 @@ func SetRegistry(registry string) {
 	}
 }
 
-// RunInstall is the main entry point for npm install operations
-func RunInstall(pkgArgs []string) {
-	dir, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERR] cannot get working directory: %v\n", err)
+// RunInit initializes the localDeps directory for the current project
+func RunInit() {
+	dir := getProjectRoot()
+
+	projectName := getProjectName(dir)
+	parentDir := filepath.Dir(dir)
+	localDepsDir := filepath.Join(parentDir, "localDeps", projectName)
+
+	// Create directory
+	if err := os.MkdirAll(localDepsDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERR] failed to create %s: %v\n", localDepsDir, err)
 		os.Exit(1)
 	}
 
-	// Check for package.json
-	if _, err := os.Stat(filepath.Join(dir, "package.json")); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "[ERR] missing package.json in %s\n", dir)
-		os.Exit(1)
+	fmt.Printf("[OK] 项目: %s\n", projectName)
+	fmt.Printf("[OK] 本地依赖目录: %s\n", localDepsDir)
+
+	// Check if cubeManualLenovo already exists
+	cubeTgz := filepath.Join(localDepsDir, "cubeManualLenovo-2.6.8.tgz")
+	if _, err := os.Stat(cubeTgz); err == nil {
+		fmt.Printf("[OK] cubeManualLenovo-2.6.8.tgz 已存在\n")
+	} else {
+		// Try to find it from the default location
+		home, _ := os.UserHomeDir()
+		defaultPath := filepath.Join(home, "wwwroot/lenovo/localDeps/baiying-intelligent-web/cubeManualLenovo-2.6.8.tgz")
+		if _, err := os.Stat(defaultPath); err == nil {
+			// Copy from default location
+			if err := copyFile(defaultPath, cubeTgz); err != nil {
+				fmt.Printf("[WARN] 复制 cubeManualLenovo 失败: %v\n", err)
+				fmt.Printf("[HINT] 请手动将 cubeManualLenovo-2.6.8.tgz 放入 %s\n", localDepsDir)
+			} else {
+				fmt.Printf("[OK] 已复制 cubeManualLenovo-2.6.8.tgz\n")
+			}
+		} else {
+			fmt.Printf("[HINT] 请将 cubeManualLenovo-2.6.8.tgz 放入 %s\n", localDepsDir)
+		}
 	}
+
+	fmt.Println("\n=========================================")
+	fmt.Println("[DONE] 初始化完成")
+	fmt.Printf("  本地依赖目录: %s\n", localDepsDir)
+	fmt.Println("  你可以将其他 .tgz 依赖包放入此目录")
+	fmt.Println("  运行 np i 即可使用本地依赖安装")
+	fmt.Println("=========================================")
+}
+
+// RunInstall is the main entry point for npm install operations
+func RunInstall(pkgArgs []string) {
+	dir := getProjectRoot()
 
 	// Check for registry env var
 	if envRegistry := os.Getenv("FALLBACK_REGISTRY"); envRegistry != "" {
 		fallbackRegistry = envRegistry
 	}
 
-	// Check if cubeManualLenovo exists and needs local tgz
-	hasCube := HasCubeManualLenovo(dir)
+	// Get project name and find local tgz files
+	projectName := getProjectName(dir)
+	parentDir := filepath.Dir(dir)
+	localDepsDir := filepath.Join(parentDir, "localDeps", projectName)
 
-	// Check for local tgz file
-	if hasCube {
-		localTgz := os.Getenv("NP_CUBE_TGZ")
-		if localTgz == "" {
-			// Try default path
-			home, _ := os.UserHomeDir()
-			localTgz = filepath.Join(home, "wwwroot/localDeps/baiying-intelligent-web/cubeManualLenovo-2.6.8.tgz")
+	// Scan localDeps for tgz files
+	localTgzs := findLocalTgzs(localDepsDir)
+	if len(localTgzs) > 0 {
+		fmt.Printf("[INFO] 找到 %d 个本地依赖包:\n", len(localTgzs))
+		for name, path := range localTgzs {
+			fmt.Printf("  - %s: %s\n", name, filepath.Base(path))
 		}
-		if _, err := os.Stat(localTgz); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "[ERR] local tgz not found: %s\n", localTgz)
-			os.Exit(1)
-		}
+	}
+
+	// Check which dependencies need local tgz
+	neededTgzs := findNeededTgzs(dir, localTgzs)
+	if len(neededTgzs) == 0 {
+		fmt.Println("[INFO] 无需本地 tgz 替换")
 	}
 
 	// Step 1: Backup files
@@ -61,21 +99,26 @@ func RunInstall(pkgArgs []string) {
 		os.Exit(1)
 	}
 
-	// Step 2: Patch cubeManualLenovo (if exists)
-	if hasCube {
-		fmt.Println("\n[Step 2/7] 替换 cubeManualLenovo...")
-		if _, err := PatchCubeManualLenovo(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERR] patch cube failed: %v\n", err)
-			RestoreOnFailure(dir)
-			os.Exit(1)
+	// Step 2: Patch local tgz dependencies
+	if len(neededTgzs) > 0 {
+		fmt.Println("\n[Step 2/7] 替换本地依赖...")
+		for pkgName, tgzPath := range neededTgzs {
+			relPath, _ := filepath.Rel(dir, tgzPath)
+			fmt.Printf("[RUN] %s → %s\n", pkgName, relPath)
+			if err := PatchPackageJson(dir, pkgName, relPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERR] patch %s failed: %v\n", pkgName, err)
+				RestoreOnFailure(dir)
+				os.Exit(1)
+			}
+			if err := PatchLockJson(dir, pkgName, relPath); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERR] patch %s in lock failed: %v\n", pkgName, err)
+				RestoreOnFailure(dir)
+				os.Exit(1)
+			}
 		}
-		if err := PatchCubeManualLenovoInLock(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "[ERR] patch cube in lock failed: %v\n", err)
-			RestoreOnFailure(dir)
-			os.Exit(1)
-		}
+		fmt.Printf("[OK] 已替换 %d 个本地依赖\n", len(neededTgzs))
 	} else {
-		fmt.Println("\n[Step 2/7] 跳过 (无 cubeManualLenovo)")
+		fmt.Println("\n[Step 2/7] 跳过 (无需本地依赖替换)")
 	}
 
 	// Step 3: Patch .npmrc
@@ -132,6 +175,127 @@ func RunInstall(pkgArgs []string) {
 	fmt.Println("=========================================")
 }
 
+// getProjectRoot checks for .git and returns project root directory
+func getProjectRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERR] cannot get working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Check for .git
+	gitDir := filepath.Join(dir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "[ERR] 未找到 .git 目录，请在项目根目录下运行\n")
+		os.Exit(1)
+	}
+
+	// Check for package.json
+	if _, err := os.Stat(filepath.Join(dir, "package.json")); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "[ERR] missing package.json in %s\n", dir)
+		os.Exit(1)
+	}
+
+	return dir
+}
+
+// getProjectName gets the project name from git remote or package.json
+func getProjectName(dir string) string {
+	// Try git remote
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err == nil {
+		url := strings.TrimSpace(string(output))
+		// Extract project name from URL
+		// e.g., http://gitlab.lenovohuishang.com/baiying/baiying-intelligent-web.git
+		//     → baiying-intelligent-web
+		if idx := strings.LastIndex(url, "/"); idx != -1 {
+			name := url[idx+1:]
+			name = strings.TrimSuffix(name, ".git")
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	// Fallback to package.json name
+	cmd = exec.Command("node", "-e", "console.log(require('./package.json').name)")
+	cmd.Dir = dir
+	output, err = cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	// Fallback to directory name
+	return filepath.Base(dir)
+}
+
+// findLocalTgzs scans localDeps directory for tgz files
+func findLocalTgzs(localDepsDir string) map[string]string {
+	result := make(map[string]string)
+
+	entries, err := os.ReadDir(localDepsDir)
+	if err != nil {
+		return result
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Scan subdirectory for tgz files
+			subDir := filepath.Join(localDepsDir, entry.Name())
+			subEntries, err := os.ReadDir(subDir)
+			if err != nil {
+				continue
+			}
+			for _, subEntry := range subEntries {
+				if !subEntry.IsDir() && strings.HasSuffix(subEntry.Name(), ".tgz") {
+					pkgName := strings.TrimSuffix(subEntry.Name(), ".tgz")
+					// Remove version suffix if present
+					if idx := strings.LastIndex(pkgName, "-"); idx != -1 {
+						pkgName = pkgName[:idx]
+					}
+					result[pkgName] = filepath.Join(subDir, subEntry.Name())
+				}
+			}
+		} else if strings.HasSuffix(entry.Name(), ".tgz") {
+			pkgName := strings.TrimSuffix(entry.Name(), ".tgz")
+			if idx := strings.LastIndex(pkgName, "-"); idx != -1 {
+				pkgName = pkgName[:idx]
+			}
+			result[pkgName] = filepath.Join(localDepsDir, entry.Name())
+		}
+	}
+
+	return result
+}
+
+// findNeededTgzs checks which dependencies in package.json have local tgz files
+func findNeededTgzs(dir string, localTgzs map[string]string) map[string]string {
+	result := make(map[string]string)
+
+	for pkgName, tgzPath := range localTgzs {
+		if hasDependency(dir, pkgName) {
+			result[pkgName] = tgzPath
+		}
+	}
+
+	return result
+}
+
+// hasDependency checks if a package exists in package.json
+func hasDependency(dir, pkgName string) bool {
+	path := filepath.Join(dir, "package.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	// Simple string search for now
+	content := string(data)
+	return strings.Contains(content, `"`+pkgName+`"`)
+}
+
 func cleanCache() {
 	cmd := exec.Command("npm", "cache", "clean", "--force")
 	cmd.Stdout = os.Stdout
@@ -182,28 +346,4 @@ func runNpmInstall(dir string, pkgArgs []string) bool {
 
 	err := cmd.Run()
 	return err == nil
-}
-
-// HasLockFile checks if a lock file exists
-func HasLockFile(dir, name string) bool {
-	_, err := os.Stat(filepath.Join(dir, name))
-	return err == nil
-}
-
-// ParseNpmOutput parses npm output to check for csnexus references
-func ParseNpmOutput(output string) bool {
-	matched, _ := regexp.MatchString(`csnexus\.lenovo\.com\.cn`, output)
-	return matched
-}
-
-// CleanNpmCacheOutput cleans npm output to remove sensitive info
-func CleanNpmCacheOutput(output string) string {
-	lines := strings.Split(output, "\n")
-	var cleaned []string
-	for _, line := range lines {
-		if !strings.Contains(line, "csnexus") {
-			cleaned = append(cleaned, line)
-		}
-	}
-	return strings.Join(cleaned, "\n")
 }

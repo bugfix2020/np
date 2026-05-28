@@ -31,8 +31,14 @@ func main() {
 		return
 	}
 
-	// np i / np install / np add
-	if args[0] == "i" || args[0] == "install" || args[0] =="" {
+	// np init
+	if args[0] == "init" {
+		core.RunInit()
+		return
+	}
+
+	// np i / np install
+	if args[0] == "i" || args[0] == "install" {
 		// np i → full install
 		if len(args) == 1 {
 			core.RunInstall(nil)
@@ -80,6 +86,7 @@ func printHelp() {
 	fmt.Println(`np (npm-proxy) v` + version + ` — bypass internal registry for npm install
 
 Usage:
+  np init                     初始化本地依赖目录
   np                          Full install (equivalent to npm install)
   np i                        Same as above
   np install                  Same as above
@@ -92,11 +99,15 @@ Usage:
 
 Environment Variables:
   FALLBACK_REGISTRY           Registry URL (default: https://registry.npmmirror.com)
-  NP_CUBE_TGZ                 Path to cubeManualLenovo tgz file
 
 Examples:
-  np                                    # full install from npmmirror
+  np init                     # 初始化本地依赖目录
+  np                          # full install from npmmirror
   np i @agent-ils/logger@latest         # add single package
   np i -D vitest@latest                 # add devDependency
-  np --registry https://registry.npmjs.org  # use custom registry`)
+  np --registry https://registry.npmjs.org  # use custom registry
+
+Local Dependencies:
+  在项目同级目录创建 localDeps/[projectName]/ 目录
+  将 .tgz 文件放入该目录即可自动使用本地依赖安装`)
 }
