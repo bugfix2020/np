@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -25,7 +24,7 @@ func MergeNewDeps(dir string) error {
 	return nil
 }
 
-// mergePackageJson patches package.json.bak by inserting new dependencies
+// mergePackageJson merges new dependencies into package.json.bak
 func mergePackageJson(dir string) (int, error) {
 	origPath := filepath.Join(dir, "package.json.bak")
 	newPath := filepath.Join(dir, "package.json")
@@ -36,8 +35,17 @@ func mergePackageJson(dir string) (int, error) {
 	}
 
 	var origPkg, newPkg map[string]interface{}
-	json.Unmarshal(origData, &origPkg)
-	json.Unmarshal(readFileSafe(newPath), &newPkg)
+	if err := json.Unmarshal(origData, &origPkg); err != nil {
+		return 0, err
+	}
+
+	newData, err := os.ReadFile(newPath)
+	if err != nil {
+		return 0, err
+	}
+	if err := json.Unmarshal(newData, &newPkg); err != nil {
+		return 0, err
+	}
 
 	added := 0
 	content := string(origData)
@@ -46,7 +54,6 @@ func mergePackageJson(dir string) (int, error) {
 		origS := getMap(origPkg, section)
 		newS := getMap(newPkg, section)
 
-		// Find new keys
 		var newKeys []string
 		for name := range newS {
 			if _, exists := origS[name]; !exists {
@@ -58,11 +65,9 @@ func mergePackageJson(dir string) (int, error) {
 			continue
 		}
 
-		sort.Strings(newKeys)
-
-		// Find the closing brace of this section
-		sectionEnd := findSectionEnd(content, section)
-		if sectionEnd < 0 {
+		// Find the section and its closing brace
+		insertPos, err := findSectionInsertPosition(content, section)
+		if err != nil {
 			continue
 		}
 
@@ -70,18 +75,34 @@ func mergePackageJson(dir string) (int, error) {
 		var lines []string
 		for _, key := range newKeys {
 			val, _ := json.Marshal(newS[key])
-			lines = append(lines, fmt.Sprintf("    %s: %s,", `"`+key+`"`, string(val)))
+			lines = append(lines, fmt.Sprintf("    %s: %s", `"`+key+`"`, string(val)))
 		}
-		insertStr := strings.Join(lines, "\n") + "\n"
+		insertStr := ",\n" + strings.Join(lines, "\n")
 
-		// Insert before closing brace
-		content = content[:sectionEnd] + insertStr + content[sectionEnd:]
+		content = content[:insertPos] + insertStr + content[insertPos:]
 		added += len(newKeys)
 	}
 
 	// Clean empty optionalDependencies
 	if strings.Contains(content, `"optionalDependencies": {}`) {
-		content = removeEmptySection(content, "optionalDependencies")
+		idx := strings.Index(content, `"optionalDependencies": {}`)
+		if idx > 0 {
+			start := idx
+			for start > 0 && content[start-1] == ' ' {
+				start--
+			}
+			if start > 0 && content[start-1] == '\n' {
+				start++
+			}
+			end := idx + len(`"optionalDependencies": {}`)
+			if end < len(content) && content[end] == ',' {
+				end++
+			}
+			if end < len(content) && content[end] == '\n' {
+				end++
+			}
+			content = content[:start] + content[end:]
+		}
 	}
 
 	if err := os.WriteFile(origPath, []byte(content), 0644); err != nil {
@@ -91,83 +112,80 @@ func mergePackageJson(dir string) (int, error) {
 	return added, nil
 }
 
-// findSectionEnd finds the position of the closing brace for a section
-func findSectionEnd(content, section string) int {
-	// Find "section": {
-	search := `"` + section + `": {`
+// findSectionInsertPosition finds where to insert new keys in a section
+// Returns two positions: where to add comma, and where to insert new lines
+func findSectionInsertPosition(content, section string) (int, error) {
+	// Find the section opening
+	search := `"` + section + `"`
 	idx := strings.Index(content, search)
 	if idx < 0 {
-		// Try with extra spaces
-		search = `"` + section + `":{`
-		idx = strings.Index(content, search)
-		if idx < 0 {
-			return -1
-		}
+		return 0, fmt.Errorf("section %s not found", section)
 	}
 
 	// Find the opening brace
-	braceStart := idx + len(search) - 1
-	braceCount := 0
-	for i := braceStart; i < len(content); i++ {
+	braceIdx := -1
+	for i := idx + len(search); i < len(content); i++ {
 		if content[i] == '{' {
-			braceCount++
+			braceIdx = i
+			break
+		}
+	}
+	if braceIdx < 0 {
+		return 0, fmt.Errorf("opening brace not found for %s", section)
+	}
+
+	// Find matching closing brace
+	depth := 1
+	closeBraceIdx := -1
+	for i := braceIdx + 1; i < len(content); i++ {
+		if content[i] == '{' {
+			depth++
 		} else if content[i] == '}' {
-			braceCount--
-			if braceCount == 0 {
-				return i
+			depth--
+			if depth == 0 {
+				closeBraceIdx = i
+				break
 			}
 		}
 	}
-	return -1
+	if closeBraceIdx < 0 {
+		return 0, fmt.Errorf("closing brace not found for %s", section)
+	}
+
+	// Find the last key-value pair before closing brace
+	// Look for the last newline before closing brace
+	lastNewline := -1
+	for i := closeBraceIdx - 1; i > braceIdx; i-- {
+		if content[i] == '\n' {
+			lastNewline = i
+			break
+		}
+	}
+
+	if lastNewline < 0 {
+		return 0, fmt.Errorf("no newline found in %s", section)
+	}
+
+	// Find the end of the last value (before trailing whitespace)
+	valueEnd := lastNewline
+	for valueEnd > braceIdx && (content[valueEnd-1] == ' ' || content[valueEnd-1] == '\t') {
+		valueEnd--
+	}
+
+	return valueEnd, nil
 }
 
-// removeEmptySection removes a section with empty object value
-func removeEmptySection(content, section string) string {
-	search := `"` + section + `": {}`
-	idx := strings.Index(content, search)
-	if idx < 0 {
-		return content
-	}
-
-	// Find the start of this line (including leading whitespace)
-	start := idx
-	for start > 0 && content[start-1] == ' ' {
-		start--
-	}
-	if start > 0 && content[start-1] == '\n' {
-		start++
-	}
-
-	// Find the end of this line (including trailing comma and newline)
-	end := idx + len(search)
-	if end < len(content) && content[end] == ',' {
-		end++
-	}
-	if end < len(content) && content[end] == '\n' {
-		end++
-	}
-
-	return content[:start] + content[end:]
-}
-
-// mergePackageLockJson merges new lock entries into the backup
+// mergePackageLockJson merges new entries into package-lock.json.bak
 func mergePackageLockJson(dir string) (int, error) {
-	origPath := filepath.Join(dir, "package-lock.json.bak")
-	newPath := filepath.Join(dir, "package-lock.json")
-
-	origData, err := os.ReadFile(origPath)
+	origLock, err := readJson(filepath.Join(dir, "package-lock.json.bak"))
 	if err != nil {
 		return 0, err
 	}
 
-	newData, err := os.ReadFile(newPath)
+	newLock, err := readJson(filepath.Join(dir, "package-lock.json"))
 	if err != nil {
 		return 0, err
 	}
-
-	var origLock, newLock map[string]interface{}
-	json.Unmarshal(origData, &origLock)
-	json.Unmarshal(newData, &newLock)
 
 	added := 0
 
@@ -208,25 +226,27 @@ func mergePackageLockJson(dir string) (int, error) {
 		}
 	}
 
-	// Write back
-	output, err := json.MarshalIndent(origLock, "", "  ")
-	if err != nil {
-		return 0, err
-	}
-
-	if err := os.WriteFile(origPath, append(output, '\n'), 0644); err != nil {
-		return 0, err
-	}
-
-	return added, nil
+	return added, writeJson(filepath.Join(dir, "package-lock.json.bak"), origLock)
 }
 
-func readFileSafe(path string) []byte {
+func readJson(path string) (map[string]interface{}, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return data
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+	}
+	return result, nil
+}
+
+func writeJson(path string, data map[string]interface{}) error {
+	output, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(output, '\n'), 0644)
 }
 
 func getMap(m map[string]interface{}, key string) map[string]interface{} {
