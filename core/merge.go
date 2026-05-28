@@ -77,7 +77,7 @@ func mergePackageJson(dir string) (int, error) {
 			val, _ := json.Marshal(newS[key])
 			lines = append(lines, fmt.Sprintf("    %s: %s", `"`+key+`"`, string(val)))
 		}
-		insertStr := ",\n" + strings.Join(lines, "\n")
+		insertStr := ",\n" + strings.Join(lines, ",\n")
 
 		content = content[:insertPos] + insertStr + content[insertPos:]
 		added += len(newKeys)
@@ -184,12 +184,31 @@ func findSectionInsertPosition(content, section string) (int, error) {
 
 // mergePackageLockJson merges new entries into package-lock.json.bak
 func mergePackageLockJson(dir string) (int, error) {
-	origLock, err := readJson(filepath.Join(dir, "package-lock.json.bak"))
+	origPath := filepath.Join(dir, "package-lock.json.bak")
+	newPath := filepath.Join(dir, "package-lock.json")
+
+	// If .bak doesn't exist, just copy the new lock file
+	if _, err := os.Stat(origPath); os.IsNotExist(err) {
+		if _, err := os.Stat(newPath); err == nil {
+			newData, err := os.ReadFile(newPath)
+			if err != nil {
+				return 0, err
+			}
+			if err := os.WriteFile(origPath, newData, 0644); err != nil {
+				return 0, err
+			}
+			fmt.Println("[OK] package-lock.json.bak 不存在，使用新生成的 lock 文件")
+			return 0, nil
+		}
+		return 0, nil
+	}
+
+	origLock, err := readJson(origPath)
 	if err != nil {
 		return 0, err
 	}
 
-	newLock, err := readJson(filepath.Join(dir, "package-lock.json"))
+	newLock, err := readJson(newPath)
 	if err != nil {
 		return 0, err
 	}

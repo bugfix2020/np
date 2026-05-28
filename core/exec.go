@@ -255,7 +255,25 @@ func getProjectRoot() string {
 	// Check for .git
 	gitDir := filepath.Join(dir, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "[ERR] 未找到 .git 目录，请在项目根目录下运行\n")
+		fmt.Fprintln(os.Stderr, `
+[ERR] 未找到 .git 目录，请在项目根目录下运行
+
+  folder/
+  ├── projectA/            ← npm 项目
+  │   ├── .git
+  │   ├── package.json
+  │   └── node_modules/
+  ├── projectB/            ← npm 项目
+  │   ├── .git
+  │   ├── package.json
+  │   └── node_modules/
+  └── localDeps/           ← 本地依赖
+      ├── projectA/
+      │   └── xxx.tgz
+      └── projectB/
+          └── yyy.tgz
+
+  请 cd 到项目根目录（包含 .git 的目录）再运行 np`)
 		os.Exit(1)
 	}
 
