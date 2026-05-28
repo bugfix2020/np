@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/bugfix2020/np/core"
@@ -83,6 +84,9 @@ func parseArgs(args []string) ([]string, string) {
 }
 
 func printHelp() {
+	goVersion := runtime.Version()
+	goArch := runtime.GOOS + "/" + runtime.GOARCH
+
 	fmt.Println(`np (npm-proxy) v` + version + ` — bypass internal registry for npm install
 
 Usage:
@@ -109,5 +113,17 @@ Examples:
 
 Local Dependencies:
   在项目同级目录创建 localDeps/[projectName]/ 目录
-  将 .tgz 文件放入该目录即可自动使用本地依赖安装`)
+  将 .tgz 文件放入该目录即可自动使用本地依赖安装
+
+═══════════════════════════════════════════════════════════════
+    ____
+   / __ \___  _________  ____
+  / / / / _ \/ ___/ __ \/ __ \
+ / /_/ /  __/ /  / /_/ / / / /
+/_____\___/_/   \____/_/ /_/
+═══════════════════════════════════════════════════════════════
+  Thank you for using np tool!
+  Built with ` + goVersion + ` (` + goArch + `)
+  github.com/bugfix2020/np
+═══════════════════════════════════════════════════════════════`)
 }
