@@ -19,48 +19,117 @@ func SetRegistry(registry string) {
 
 // RunInit initializes the localDeps directory for the current project
 func RunInit() {
+	fmt.Println("[Step 1/4] 检查项目环境...")
 	dir := getProjectRoot()
+	fmt.Printf("[OK] 已定位项目根目录: %s\n", dir)
 
+	fmt.Println("\n[Step 2/4] 获取项目名称...")
 	projectName := getProjectName(dir)
+	fmt.Printf("[OK] 项目名称: %s\n", projectName)
+
+	fmt.Println("\n[Step 3/4] 创建本地依赖目录...")
 	parentDir := filepath.Dir(dir)
 	localDepsDir := filepath.Join(parentDir, "localDeps", projectName)
 
-	// Create directory
 	if err := os.MkdirAll(localDepsDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "[ERR] failed to create %s: %v\n", localDepsDir, err)
+		fmt.Fprintf(os.Stderr, "[ERR] 创建目录失败 %s: %v\n", localDepsDir, err)
 		os.Exit(1)
 	}
+	fmt.Printf("[OK] 目录已创建: %s\n", localDepsDir)
 
-	fmt.Printf("[OK] 项目: %s\n", projectName)
-	fmt.Printf("[OK] 本地依赖目录: %s\n", localDepsDir)
+	fmt.Println("\n[Step 4/4] 检查预置本地依赖包...")
+	// Check if there are any built-in tgz packages for this project
+	builtinPkgs := getBuiltinPackages(projectName)
 
-	// Check if cubeManualLenovo already exists
-	cubeTgz := filepath.Join(localDepsDir, "cubeManualLenovo-2.6.8.tgz")
-	if _, err := os.Stat(cubeTgz); err == nil {
-		fmt.Printf("[OK] cubeManualLenovo-2.6.8.tgz 已存在\n")
+	if len(builtinPkgs) == 0 {
+		fmt.Printf("[INFO] 项目 %s 没有预置的本地依赖包\n", projectName)
+		fmt.Println("[INFO] 你可以手动将 .tgz 文件放入目录:")
+		fmt.Printf("       %s\n", localDepsDir)
 	} else {
-		// Try to find it from the default location
-		home, _ := os.UserHomeDir()
-		defaultPath := filepath.Join(home, "wwwroot/lenovo/localDeps/baiying-intelligent-web/cubeManualLenovo-2.6.8.tgz")
-		if _, err := os.Stat(defaultPath); err == nil {
-			// Copy from default location
-			if err := copyFile(defaultPath, cubeTgz); err != nil {
-				fmt.Printf("[WARN] 复制 cubeManualLenovo 失败: %v\n", err)
-				fmt.Printf("[HINT] 请手动将 cubeManualLenovo-2.6.8.tgz 放入 %s\n", localDepsDir)
-			} else {
-				fmt.Printf("[OK] 已复制 cubeManualLenovo-2.6.8.tgz\n")
+		for pkgName, srcPath := range builtinPkgs {
+			dstPath := filepath.Join(localDepsDir, filepath.Base(srcPath))
+
+			// Check if already exists
+			if _, err := os.Stat(dstPath); err == nil {
+				fmt.Printf("[SKIP] %s 已存在，跳过\n", filepath.Base(srcPath))
+				continue
 			}
-		} else {
-			fmt.Printf("[HINT] 请将 cubeManualLenovo-2.6.8.tgz 放入 %s\n", localDepsDir)
+
+			// Check if source exists
+			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+				fmt.Printf("[WARN] 预置包源文件不存在: %s\n", srcPath)
+				fmt.Printf("[HINT] 请手动将 %s 放入 %s\n", pkgName, localDepsDir)
+				continue
+			}
+
+			// Copy
+			fmt.Printf("[COPY] %s → %s\n", srcPath, dstPath)
+			if err := copyFile(srcPath, dstPath); err != nil {
+				fmt.Printf("[ERR] 复制失败: %v\n", err)
+				fmt.Printf("[HINT] 请手动将 %s 放入 %s\n", pkgName, localDepsDir)
+			} else {
+				fmt.Printf("[OK] %s 已复制到本地依赖目录\n", filepath.Base(srcPath))
+			}
 		}
 	}
 
+	// List current contents
 	fmt.Println("\n=========================================")
 	fmt.Println("[DONE] 初始化完成")
-	fmt.Printf("  本地依赖目录: %s\n", localDepsDir)
-	fmt.Println("  你可以将其他 .tgz 依赖包放入此目录")
+	fmt.Printf("  项目: %s\n", projectName)
+	fmt.Printf("  目录: %s\n", localDepsDir)
+	entries, _ := os.ReadDir(localDepsDir)
+	if len(entries) == 0 {
+		fmt.Println("  内容: (空)")
+	} else {
+		fmt.Println("  内容:")
+		for _, e := range entries {
+			fmt.Printf("    - %s\n", e.Name())
+		}
+	}
 	fmt.Println("  运行 np i 即可使用本地依赖安装")
 	fmt.Println("=========================================")
+}
+
+// getBuiltinPackages returns built-in tgz packages for a given project
+// Only projects with known dependencies will have packages
+func getBuiltinPackages(projectName string) map[string]string {
+	result := make(map[string]string)
+
+	// Define built-in packages per project
+	builtin := map[string][]struct {
+		pkgName string
+		tgzName string
+	}{
+		"baiying-intelligent-web": {
+			{pkgName: "cubeManualLenovo", tgzName: "cubeManualLenovo-2.6.8.tgz"},
+		},
+	}
+
+	pkgs, ok := builtin[projectName]
+	if !ok {
+		return result
+	}
+
+	// Search for tgz files in common locations
+	home, _ := os.UserHomeDir()
+	searchPaths := []string{
+		filepath.Join(home, "wwwroot/lenovo/localDeps/baiying-intelligent-web"),
+		filepath.Join(home, "wwwroot/self/localDeps", projectName),
+		filepath.Join(home, ".np/localDeps", projectName),
+	}
+
+	for _, pkg := range pkgs {
+		for _, searchDir := range searchPaths {
+			tgzPath := filepath.Join(searchDir, pkg.tgzName)
+			if _, err := os.Stat(tgzPath); err == nil {
+				result[pkg.pkgName] = tgzPath
+				break
+			}
+		}
+	}
+
+	return result
 }
 
 // RunInstall is the main entry point for npm install operations
